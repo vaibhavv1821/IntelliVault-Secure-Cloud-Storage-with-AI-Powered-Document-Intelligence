@@ -12,7 +12,7 @@
 * **Project Status:** Phase 0 ~ Foundation [COMPLETED & VERIFIED]
 * **Version:** 0.1.0-foundation
 * **Last Updated:** 2026-09-03
-* **Repository:** `vaibhavv1821/ServeMate-Ai` / `IntelliVault`
+* **Repository:** `vaibhavv1821/IntelliVault-Secure-Cloud-Storage-with-AI-Powered-Document-Intelligence`
 
 ---
 

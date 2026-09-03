@@ -46,7 +46,7 @@ Crucially, **no third-party generative AI APIs** are used for core intelligence 
 ### 2. Setup Environment
 ```bash
 # Clone repository
-git clone https://github.com/vaibhavv1821/ServeMate-Ai.git
+git clone https://github.com/vaibhavv1821/IntelliVault-Secure-Cloud-Storage-with-AI-Powered-Document-Intelligence.git
 cd IntelliVault
 
 # Copy environment template
