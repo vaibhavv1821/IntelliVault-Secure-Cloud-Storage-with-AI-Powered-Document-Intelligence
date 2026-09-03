@@ -1,0 +1,12 @@
+# IntelliVault Backend Dependencies
+flask>=3.0.0
+flask-cors>=4.0.0
+pymongo>=4.6.0
+minio>=7.2.0
+python-dotenv>=1.0.0
+pytest>=8.0.0
+reportlab>=4.0.0
+markdown>=3.5.0
+cryptography>=42.0.0
+pyjwt>=2.8.0
+bcrypt>=4.1.0
