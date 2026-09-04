@@ -5,7 +5,9 @@ and password policy validation.
 """
 
 import re
+from datetime import datetime, timezone, timedelta
 import bcrypt
+import jwt
 
 # Bcrypt workload factor (cost = 12 represents 4,096 hashing rounds)
 DEFAULT_BCRYPT_ROUNDS = 12
@@ -89,3 +91,65 @@ def verify_password(password: str, password_hash: str) -> bool:
     except (ValueError, TypeError):
         # Gracefully handle malformed hash representations
         return False
+
+
+# JWT Configuration Defaults
+JWT_DEFAULT_ALGORITHM = "HS256"
+
+
+def generate_access_token(
+    user_id: str,
+    email: str,
+    role: str,
+    secret_key: str,
+    expires_in_seconds: int = 86400,
+    algorithm: str = JWT_DEFAULT_ALGORITHM
+) -> str:
+    """
+    Generates a cryptographically signed JWT access token.
+    Claims embedded:
+    - sub: unique user identifier
+    - email: user account email address
+    - role: role-based access control level
+    - iat: issued-at UTC timestamp
+    - exp: expiration UTC timestamp
+    """
+    if not user_id or not isinstance(user_id, str):
+        raise ValueError("user_id must be a non-empty string.")
+    if not email or not isinstance(email, str):
+        raise ValueError("email must be a non-empty string.")
+    if not role or not isinstance(role, str):
+        raise ValueError("role must be a non-empty string.")
+    if not secret_key or not isinstance(secret_key, str):
+        raise ValueError("secret_key must be a non-empty string.")
+
+    now = datetime.now(timezone.utc)
+    expiration = now + timedelta(seconds=expires_in_seconds)
+
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int(expiration.timestamp())
+    }
+
+    return jwt.encode(payload, secret_key, algorithm=algorithm)
+
+
+def decode_access_token(
+    token: str,
+    secret_key: str,
+    algorithm: str = JWT_DEFAULT_ALGORITHM
+) -> dict:
+    """
+    Decodes and verifies a JWT access token against the configured signing key.
+    Raises jwt.ExpiredSignatureError if token lifetime has lapsed.
+    Raises jwt.InvalidTokenError for invalid signatures or malformed tokens.
+    """
+    if not token or not isinstance(token, str):
+        raise ValueError("Token must be a non-empty string.")
+    if not secret_key or not isinstance(secret_key, str):
+        raise ValueError("secret_key must be a non-empty string.")
+
+    return jwt.decode(token, secret_key, algorithms=[algorithm])

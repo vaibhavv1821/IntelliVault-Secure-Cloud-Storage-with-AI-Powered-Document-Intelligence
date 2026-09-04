@@ -4,10 +4,16 @@ Implements core business logic for user account registration, credentials verifi
 and unique account constraints.
 """
 
+from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 from backend.app.models.user import User
 from backend.app.services.db import db_service
-from backend.app.utils.security import hash_password, validate_password_strength
+from backend.app.utils.security import (
+    hash_password,
+    verify_password,
+    validate_password_strength,
+    generate_access_token
+)
 from backend.app.utils.logger import logger
 
 
@@ -23,6 +29,21 @@ class ValidationError(RegistrationError):
 
 class DuplicateEmailError(RegistrationError):
     """Raised when an attempt is made to register with an existing email."""
+    pass
+
+
+class AuthenticationError(Exception):
+    """Base exception for user authentication failures."""
+    pass
+
+
+class InvalidCredentialsError(AuthenticationError):
+    """Raised when provided credentials do not match or account does not exist."""
+    pass
+
+
+class AccountDisabledError(AuthenticationError):
+    """Raised when an inactive, suspended, or pending user attempts to log in."""
     pass
 
 
@@ -103,3 +124,82 @@ def register_user(name: str, email: str, password: str) -> dict:
 
     # 8. Return public serialized representation
     return user.to_dict(include_sensitive=False)
+
+
+def authenticate_user(
+    email: str,
+    password: str,
+    secret_key: str,
+    expires_in_seconds: int = 86400
+) -> dict:
+    """
+    Authenticates a user via email and password credentials:
+    1. Validates presence and types of email and password.
+    2. Normalizes email.
+    3. Retrieves user record from MongoDB.
+    4. Guards against user enumeration timing attacks via constant-time dummy verification.
+    5. Verifies password using constant-time bcrypt verification.
+    6. Verifies account status is 'active'.
+    7. Updates last_login_at timestamp in MongoDB.
+    8. Generates a signed JWT access token.
+    9. Returns sanitized user dictionary and token metadata.
+    """
+    if not email or not isinstance(email, str) or not email.strip():
+        raise ValidationError("Email is required.")
+
+    if not password or not isinstance(password, str):
+        raise ValidationError("Password is required.")
+
+    normalized_email = email.strip().lower()
+
+    users_col = db_service.get_collection("users")
+    user_doc = users_col.find_one({"email": normalized_email})
+
+    if not user_doc:
+        # Constant-time mitigation against user enumeration timing attacks
+        verify_password(
+            "dummy_mitigation_password",
+            "$2b$12$e8YkY9u4q01234567890123456789012345678901234567890123"
+        )
+        raise InvalidCredentialsError("Invalid email or password.")
+
+    user = User.from_db(user_doc)
+
+    # Verify bcrypt password hash
+    if not verify_password(password, user.password_hash):
+        raise InvalidCredentialsError("Invalid email or password.")
+
+    # Check account status
+    if user.status != "active":
+        raise AccountDisabledError(
+            f"Account is currently {user.status}. Please contact an administrator."
+        )
+
+    # Update last_login_at and updated_at in MongoDB
+    now = datetime.now(timezone.utc)
+    users_col.update_one(
+        {"_id": user._id},
+        {"$set": {"last_login_at": now, "updated_at": now}}
+    )
+    user.last_login_at = now
+    user.updated_at = now
+
+    # Generate JWT access token
+    access_token = generate_access_token(
+        user_id=str(user._id),
+        email=user.email,
+        role=user.role,
+        secret_key=secret_key,
+        expires_in_seconds=expires_in_seconds
+    )
+
+    logger.info(f"User successfully logged in: {user.email} (ID: {user._id})")
+
+    return {
+        "user": user.to_dict(include_sensitive=False),
+        "token": {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": expires_in_seconds
+        }
+    }

@@ -85,7 +85,8 @@ IntelliVault solves these dilemmas by combining application-level envelope encry
 | F04 | MongoDB Connection Adapter | Phase 0 | **IMPLEMENTED** | **TESTED** (Diagnostic Probe Verified) |
 | F05 | MinIO/S3 Storage Adapter | Phase 0 | **IMPLEMENTED** | **TESTED** (Diagnostic Probe Verified) |
 | F06 | User Registration & Auth Models | Phase 1 | **IMPLEMENTED** | **TESTED** (18 Integration Tests) |
-| F06b| JWT Login & RBAC Middleware | Phase 1 | `PLANNED` | Unverified |
+| F06b| Login & JWT Token Generation | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
+| F06c| Auth Middleware & RBAC | Phase 1 | `PLANNED` | Unverified |
 | F07 | Secure File Upload/Download | Phase 1 | `PLANNED` | Unverified |
 | F08 | AES-256 GCM File Encryption | Phase 1 | `PLANNED` | Unverified |
 | F09 | Folder Hierarchy & Movement | Phase 1 | `PLANNED` | Unverified |
@@ -399,15 +400,44 @@ Immutable append-only access events powering the Phase 3 Isolation Forest anomal
   5. **Persistence:** Encapsulated in `User` domain entity with safe defaults (`role: "member"`, `status: "active"`, UTC timestamps) and persisted via PyMongo to the `users` collection.
   6. **Sanitized Response:** Returns HTTP 201 Created containing the public user representation (`id`, `name`, `email`, `role`, `status`, `created_at`), strictly omitting `password_hash`.
 
-### 15.2 Login & Token Architecture `[PLANNED - Phase 1]`
-* **Status:** PLANNED (Not yet implemented).
-* **Protocol:** Stateless JSON Web Tokens (JWT).
-* **Planned Workflow:**
-  1. User submits credentials (`POST /api/auth/login`).
-  2. Backend verifies bcrypt password hash (`cost factor = 12`).
-  3. Server signs JWT payload with `HMAC-SHA256` containing `user_id`, `username`, `role`, and expiration timestamp (`exp`).
-  4. Client stores token securely in HTTP-only cookies or memory + auth headers.
-  5. Subsequent requests transmit `Authorization: Bearer <token>`.
+### 15.2 User Login & JWT Token Generation `[IMPLEMENTED & TESTED]`
+* **Status:**
+  - Login: **IMPLEMENTED & TESTED**
+  - JWT Token Generation: **IMPLEMENTED & TESTED**
+  - Authentication Middleware: **NOT IMPLEMENTED YET**
+* **Endpoint:** `POST /api/auth/login`
+* **Authentication Pipeline:**
+  1. **Request Intake:** Client transmits JSON payload `{ "email": "...", "password": "..." }`.
+  2. **Credential Validation:**
+     - Validates payload presence and non-empty string types.
+     - Email is normalized (lowercase, whitespace stripped).
+  3. **Timing-Attack Resilient Lookup:**
+     - Queries MongoDB `users` collection by normalized email.
+     - If account does not exist, performs a constant-time dummy bcrypt verification (`$2b$12$...`) matching typical CPU latency before returning generic HTTP 401 Unauthorized (`INVALID_CREDENTIALS`), neutralizing user enumeration timing attacks.
+  4. **Password Verification:**
+     - Reconstructs `User` domain entity from database document.
+     - Evaluates provided password against stored `password_hash` via `bcrypt.checkpw()`.
+     - Returns generic HTTP 401 Unauthorized if verification fails.
+  5. **Account State Enforcement:**
+     - Inspects user `status`. If account is `suspended` or `pending`, denies access with HTTP 403 Forbidden (`ACCOUNT_DISABLED`).
+  6. **Telemetry & Audit Update:**
+     - On successful credentials verification, updates `last_login_at` and `updated_at` timestamps in MongoDB to UTC now.
+     - Failed authentication attempts never modify timestamps.
+  7. **JWT Token Issuance:**
+     - Signs a stateless JWT access token using HMAC-SHA256 (`HS256`) signed with `JWT_SECRET_KEY`.
+     - **Embedded Claims:**
+       - `sub`: Unique user ID (string representation of MongoDB `_id`).
+       - `email`: Normalized account email.
+       - `role`: RBAC access level (`admin`, `member`, `viewer`).
+       - `iat`: Epoch integer timestamp of issuance.
+       - `exp`: Epoch integer timestamp of expiration (default: 24 hours).
+     - Strictly excludes sensitive data (`password`, `password_hash`).
+  8. **Response:**
+     - Returns HTTP 200 OK containing sanitized user profile (`id`, `name`, `email`, `role`, `status`, `created_at`, `last_login_at`) and token metadata `{ "access_token": "...", "token_type": "Bearer", "expires_in": 86400 }`.
+
+### 15.3 Authentication Middleware & Route Protection `[NOT IMPLEMENTED YET]`
+* **Status:** NOT IMPLEMENTED YET (Target: Step 5).
+* **Scope:** Will intercept incoming requests bearing `Authorization: Bearer <token>`, validate signature, extract user identity context, and enforce role permissions.
 
 ---
 

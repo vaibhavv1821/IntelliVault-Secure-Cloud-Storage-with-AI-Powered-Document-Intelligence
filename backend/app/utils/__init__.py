@@ -8,9 +8,12 @@ from backend.app.utils.security import (
     hash_password,
     verify_password,
     validate_password_strength,
+    generate_access_token,
+    decode_access_token,
     DEFAULT_BCRYPT_ROUNDS,
     BCRYPT_MAX_BYTES,
-    MIN_PASSWORD_LENGTH
+    MIN_PASSWORD_LENGTH,
+    JWT_DEFAULT_ALGORITHM
 )
 
 __all__ = [
@@ -20,7 +23,10 @@ __all__ = [
     "hash_password",
     "verify_password",
     "validate_password_strength",
+    "generate_access_token",
+    "decode_access_token",
     "DEFAULT_BCRYPT_ROUNDS",
     "BCRYPT_MAX_BYTES",
-    "MIN_PASSWORD_LENGTH"
+    "MIN_PASSWORD_LENGTH",
+    "JWT_DEFAULT_ALGORITHM"
 ]
