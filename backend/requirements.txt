@@ -10,3 +10,4 @@ markdown>=3.5.0
 cryptography>=42.0.0
 pyjwt>=2.8.0
 bcrypt>=4.1.0
+mongomock>=4.3.0

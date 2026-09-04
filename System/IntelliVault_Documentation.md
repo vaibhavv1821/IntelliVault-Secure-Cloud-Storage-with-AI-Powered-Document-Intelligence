@@ -84,7 +84,8 @@ IntelliVault solves these dilemmas by combining application-level envelope encry
 | F03 | React + Vite + Tailwind Frontend | Phase 0 | **IMPLEMENTED** | **TESTED** (Vite Build 0 Errors) |
 | F04 | MongoDB Connection Adapter | Phase 0 | **IMPLEMENTED** | **TESTED** (Diagnostic Probe Verified) |
 | F05 | MinIO/S3 Storage Adapter | Phase 0 | **IMPLEMENTED** | **TESTED** (Diagnostic Probe Verified) |
-| F06 | JWT Authentication & RBAC | Phase 1 | `PLANNED` | Unverified |
+| F06 | User Registration & Auth Models | Phase 1 | **IMPLEMENTED** | **TESTED** (18 Integration Tests) |
+| F06b| JWT Login & RBAC Middleware | Phase 1 | `PLANNED` | Unverified |
 | F07 | Secure File Upload/Download | Phase 1 | `PLANNED` | Unverified |
 | F08 | AES-256 GCM File Encryption | Phase 1 | `PLANNED` | Unverified |
 | F09 | Folder Hierarchy & Movement | Phase 1 | `PLANNED` | Unverified |
@@ -379,10 +380,29 @@ Immutable append-only access events powering the Phase 3 Isolation Forest anomal
 
 ---
 
-## 15. Authentication Architecture `[PLANNED - Phase 1]`
+## 15. Authentication Architecture `[IN PROGRESS - Phase 1]`
 
+### 15.1 User Registration `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (18/18 integration and unit tests passing).
+* **Endpoint:** `POST /api/auth/register`
+* **Registration Pipeline:**
+  1. **Request Reception:** Client transmits JSON payload `{ "name": "...", "email": "...", "password": "..." }`.
+  2. **Validation & Normalization:**
+     - `name`: Must be non-empty string between 2 and 100 characters.
+     - `email`: Normalized to lowercase, stripped of whitespace, verified against RFC 5322 regex.
+     - `password`: Verified against complexity policy (minimum 8 characters, maximum 72 bytes, at least 1 uppercase, 1 lowercase, 1 digit, and 1 special symbol).
+  3. **Duplicate Prevention:**
+     - Pre-flight query against MongoDB `users` collection for existing normalized email.
+     - Unique index constraint on `users.email` guaranteeing database-level uniqueness under concurrent registration.
+     - Returns HTTP 409 Conflict (`EMAIL_ALREADY_EXISTS`) on collisions.
+  4. **Cryptographic Hashing:** Plaintext password is never stored or logged. Hashed using `bcrypt` with work factor 12 (`$2b$12$...`) and unique salts. Enforces a 72-byte ceiling to eliminate the silent truncation vulnerability.
+  5. **Persistence:** Encapsulated in `User` domain entity with safe defaults (`role: "member"`, `status: "active"`, UTC timestamps) and persisted via PyMongo to the `users` collection.
+  6. **Sanitized Response:** Returns HTTP 201 Created containing the public user representation (`id`, `name`, `email`, `role`, `status`, `created_at`), strictly omitting `password_hash`.
+
+### 15.2 Login & Token Architecture `[PLANNED - Phase 1]`
+* **Status:** PLANNED (Not yet implemented).
 * **Protocol:** Stateless JSON Web Tokens (JWT).
-* **Workflow:**
+* **Planned Workflow:**
   1. User submits credentials (`POST /api/auth/login`).
   2. Backend verifies bcrypt password hash (`cost factor = 12`).
   3. Server signs JWT payload with `HMAC-SHA256` containing `user_id`, `username`, `role`, and expiration timestamp (`exp`).
