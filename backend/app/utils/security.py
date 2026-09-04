@@ -147,9 +147,94 @@ def decode_access_token(
     Raises jwt.ExpiredSignatureError if token lifetime has lapsed.
     Raises jwt.InvalidTokenError for invalid signatures or malformed tokens.
     """
-    if not token or not isinstance(token, str):
-        raise ValueError("Token must be a non-empty string.")
-    if not secret_key or not isinstance(secret_key, str):
-        raise ValueError("secret_key must be a non-empty string.")
-
     return jwt.decode(token, secret_key, algorithms=[algorithm])
+
+
+def jwt_required(f):
+    """
+    Route decorator requiring a valid JWT bearer token in the Authorization header.
+    Validates token signature, expiration, and extracts the user context onto flask.g.current_user.
+    """
+    from functools import wraps
+    from flask import request, g, current_app
+    from bson import ObjectId
+    from backend.app.models.user import User
+    from backend.app.services.db import db_service
+    from backend.app.utils.response import error_response
+
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return error_response(
+                message="Authorization header is required.",
+                error_code="MISSING_TOKEN",
+                status_code=401
+            )
+
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return error_response(
+                message="Authorization header must follow format: Bearer <token>",
+                error_code="MALFORMED_TOKEN",
+                status_code=401
+            )
+
+        token = parts[1]
+        secret_key = current_app.config.get("JWT_SECRET_KEY")
+
+        try:
+            payload = decode_access_token(token, secret_key)
+        except jwt.ExpiredSignatureError:
+            return error_response(
+                message="Authentication token has expired. Please log in again.",
+                error_code="TOKEN_EXPIRED",
+                status_code=401
+            )
+        except jwt.InvalidTokenError:
+            return error_response(
+                message="Invalid authentication token.",
+                error_code="INVALID_TOKEN",
+                status_code=401
+            )
+        except Exception:
+            return error_response(
+                message="Failed to validate authentication token.",
+                error_code="TOKEN_VALIDATION_FAILED",
+                status_code=401
+            )
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return error_response(
+                message="Token payload is missing subject claim.",
+                error_code="INVALID_TOKEN",
+                status_code=401
+            )
+
+        users_col = db_service.get_collection("users")
+        try:
+            obj_id = ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id
+            user_doc = users_col.find_one({"_id": obj_id})
+        except Exception:
+            user_doc = None
+
+        if not user_doc:
+            return error_response(
+                message="Authenticated user account does not exist.",
+                error_code="USER_NOT_FOUND",
+                status_code=401
+            )
+
+        user = User.from_db(user_doc)
+        if user.status != "active":
+            return error_response(
+                message=f"Account is currently {user.status}.",
+                error_code="ACCOUNT_DISABLED",
+                status_code=403
+            )
+
+        g.current_user = user
+        return f(*args, **kwargs)
+
+    return decorated

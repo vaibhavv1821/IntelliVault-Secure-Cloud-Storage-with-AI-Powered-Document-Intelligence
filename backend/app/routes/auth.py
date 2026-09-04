@@ -3,7 +3,7 @@ IntelliVault ~ Authentication & Authorization API Routes
 Handles user registration, identity verification, and credentials processing.
 """
 
-from flask import Blueprint, request
+from flask import Blueprint, request, g
 from backend.app.services.auth_service import (
     register_user,
     authenticate_user,
@@ -12,6 +12,7 @@ from backend.app.services.auth_service import (
     InvalidCredentialsError,
     AccountDisabledError
 )
+from backend.app.utils.security import jwt_required
 from backend.app.utils.response import success_response, error_response
 from backend.app.utils.logger import logger
 
@@ -138,3 +139,18 @@ def login():
             error_code="LOGIN_FAILED",
             status_code=500
         )
+
+
+@auth_bp.route("/me", methods=["GET"])
+@jwt_required
+def get_current_user():
+    """
+    Returns the authenticated user's profile.
+    Requires Authorization: Bearer <token>.
+    """
+    user = g.current_user
+    return success_response(
+        data={"user": user.to_dict(include_sensitive=False)},
+        message="Current user profile retrieved successfully.",
+        status_code=200
+    )

@@ -86,7 +86,8 @@ IntelliVault solves these dilemmas by combining application-level envelope encry
 | F05 | MinIO/S3 Storage Adapter | Phase 0 | **IMPLEMENTED** | **TESTED** (Diagnostic Probe Verified) |
 | F06 | User Registration & Auth Models | Phase 1 | **IMPLEMENTED** | **TESTED** (18 Integration Tests) |
 | F06b| Login & JWT Token Generation | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
-| F06c| Auth Middleware & RBAC | Phase 1 | `PLANNED` | Unverified |
+| F06c| Auth Middleware & Protected Dashboard | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
+| F06d| Role-Based Access Control (RBAC) | Phase 1 | `PLANNED` | Unverified |
 | F07 | Secure File Upload/Download | Phase 1 | `PLANNED` | Unverified |
 | F08 | AES-256 GCM File Encryption | Phase 1 | `PLANNED` | Unverified |
 | F09 | Folder Hierarchy & Movement | Phase 1 | `PLANNED` | Unverified |
@@ -435,9 +436,36 @@ Immutable append-only access events powering the Phase 3 Isolation Forest anomal
   8. **Response:**
      - Returns HTTP 200 OK containing sanitized user profile (`id`, `name`, `email`, `role`, `status`, `created_at`, `last_login_at`) and token metadata `{ "access_token": "...", "token_type": "Bearer", "expires_in": 86400 }`.
 
-### 15.3 Authentication Middleware & Route Protection `[NOT IMPLEMENTED YET]`
-* **Status:** NOT IMPLEMENTED YET (Target: Step 5).
-* **Scope:** Will intercept incoming requests bearing `Authorization: Bearer <token>`, validate signature, extract user identity context, and enforce role permissions.
+### 15.3 Authentication Middleware & Current User Endpoint `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (9/9 integration tests passing).
+* **Middleware Decorator:** `@jwt_required`
+  - Intercepts incoming HTTP requests inspecting the `Authorization` header.
+  - Enforces standard schema: `Authorization: Bearer <token>`.
+  - Rejects missing headers with HTTP 401 Unauthorized (`MISSING_TOKEN`).
+  - Rejects malformed headers with HTTP 401 Unauthorized (`MALFORMED_TOKEN`).
+  - Decodes token using HMAC-SHA256 (`HS256`) and `JWT_SECRET_KEY`.
+  - Catches expired signatures returning HTTP 401 Unauthorized (`TOKEN_EXPIRED`).
+  - Catches invalid/tampered signatures returning HTTP 401 Unauthorized (`INVALID_TOKEN`).
+  - Queries MongoDB `users` collection by subject ID (`sub`).
+  - Verifies account status is `active`; denies suspended/disabled accounts with HTTP 403 Forbidden (`ACCOUNT_DISABLED`).
+  - Attaches validated `User` domain entity to thread-local `flask.g.current_user`.
+* **Endpoint:** `GET /api/auth/me`
+  - Protected by `@jwt_required`.
+  - Returns authenticated user profile: `id`, `name`, `email`, `role`, `status`, `created_at`, `last_login_at`.
+  - Strictly omits `password` and `password_hash`.
+
+### 15.4 React Protected Dashboard & Navigation `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (Vite production build verified).
+* **Flow:**
+  1. Unauthenticated users view the `AuthCard` (Sign In / Create Account toggle).
+  2. Upon successful login, the JWT access token is stored in `localStorage`.
+  3. App calls `GET /api/auth/me` to hydrate the user profile.
+  4. Renders clean, single-page `Dashboard` displaying:
+     - Vault Header & Session info
+     - User welcome greeting, email address, and active status badge
+     - "My Files" container with placeholder for file upload
+     - "Logout" action which clears `localStorage` token and returns to Login.
+  5. If an expired or invalid token is detected, the session is cleared automatically.
 
 ---
 
