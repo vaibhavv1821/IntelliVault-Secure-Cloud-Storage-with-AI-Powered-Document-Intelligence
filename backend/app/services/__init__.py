@@ -16,6 +16,15 @@ from backend.app.services.auth_service import (
     AccountDisabledError
 )
 
+from backend.app.services.file_service import (
+    upload_file,
+    get_user_files,
+    ensure_file_indexes,
+    FileServiceError,
+    FileValidationError,
+    FileUploadError
+)
+
 __all__ = [
     "db_service",
     "storage_service",
@@ -27,5 +36,12 @@ __all__ = [
     "DuplicateEmailError",
     "AuthenticationError",
     "InvalidCredentialsError",
-    "AccountDisabledError"
+    "AccountDisabledError",
+    "upload_file",
+    "get_user_files",
+    "ensure_file_indexes",
+    "FileServiceError",
+    "FileValidationError",
+    "FileUploadError"
 ]
+

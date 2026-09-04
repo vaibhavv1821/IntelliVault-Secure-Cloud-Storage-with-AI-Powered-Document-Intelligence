@@ -11,7 +11,9 @@ from backend.app.services.db import db_service
 from backend.app.services.storage import storage_service
 from backend.app.routes.health import health_bp
 from backend.app.routes.auth import auth_bp
+from backend.app.routes.files import files_bp
 from backend.app.services.auth_service import ensure_user_indexes
+from backend.app.services.file_service import ensure_file_indexes
 from backend.app.utils.logger import logger
 from backend.app.utils.response import error_response
 
@@ -35,10 +37,13 @@ def create_app(config_name=None):
     # Ensure database indexes (skip blocking network check in testing mode)
     if not app.config.get("TESTING", False):
         ensure_user_indexes()
+        ensure_file_indexes()
 
     # Register Blueprints
     app.register_blueprint(health_bp, url_prefix="/api")
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
+    app.register_blueprint(files_bp, url_prefix="/api/files")
+
 
     # Global Error Handlers
     @app.errorhandler(404)

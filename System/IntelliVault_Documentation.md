@@ -88,8 +88,10 @@ IntelliVault solves these dilemmas by combining application-level envelope encry
 | F06b| Login & JWT Token Generation | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
 | F06c| Auth Middleware & Protected Dashboard | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
 | F06d| Role-Based Access Control (RBAC) | Phase 1 | `PLANNED` | Unverified |
-| F07 | Secure File Upload/Download | Phase 1 | `PLANNED` | Unverified |
+| F07 | Basic File Upload & Metadata | Phase 1 | **IMPLEMENTED** | **TESTED** (12 Integration Tests) |
+| F07b| File Download & Streaming | Phase 1 | `PLANNED` | Unverified |
 | F08 | AES-256 GCM File Encryption | Phase 1 | `PLANNED` | Unverified |
+
 | F09 | Folder Hierarchy & Movement | Phase 1 | `PLANNED` | Unverified |
 | F10 | File Versioning Engine | Phase 1 | `PLANNED` | Unverified |
 | F11 | Expiring Share Links | Phase 1 | `PLANNED` | Unverified |
@@ -371,14 +373,21 @@ Immutable append-only access events powering the Phase 3 Isolation Forest anomal
 
 ---
 
-## 14. Object Storage Design
+## 14. Object Storage Design `[IN PROGRESS - Phase 1]`
 
 * **Provider:** MinIO (Local) / AWS S3 (Cloud Deployment)
-* **Storage Philosophy:** Content-Addressed and UUID-keyed storage. Files are never stored using their raw filenames to prevent path traversal attacks and namespace collisions.
+* **Storage Philosophy:** Content-Addressed and UUID-keyed storage. Files are never stored using their raw filenames to prevent path traversal attacks, file system collisions, and unauthenticated namespace discovery.
 * **Bucket Layout:**
-  - `intellivault-files`: Holds encrypted primary file blobs.
+  - `intellivault-files`: Holds primary file objects (configured via `MINIO_BUCKET_NAME`).
   - `intellivault-versions`: Holds immutable previous versions.
   - `intellivault-redacted`: Holds sanitized PII-redacted document variants.
+* **Storage Key Format:** `user-files/{user_id}/{uuid4}_{sanitized_original_filename}`
+  - Guarantees strict multi-tenant directory partitioning by user ID.
+  - Generates collision-resistant unique object identifiers using UUIDv4.
+  - Retains sanitized base extension via Werkzeug `secure_filename`.
+* **Streaming Protocol:** Server-side streaming directly to MinIO via `put_object(bucket, object_name, data=stream, length=size, content_type=mime)`. Eliminates intermediate temp file disk writes.
+* **Orphan Cleanup Safeguard:** If database metadata insertion fails following a successful MinIO blob write, the backend executes an immediate compensating rollback: `remove_object(bucket, object_name)`. This guarantees zero orphan binary leakage in object storage.
+
 
 ---
 
@@ -516,11 +525,37 @@ Three built-in hierarchical roles:
 
 ---
 
-## 19. File Management `[PLANNED - Phase 1]`
+## 19. File Management `[IN PROGRESS - Phase 1]`
 
-* Endpoints for uploading, downloading, renaming, soft-deleting, and restoring files.
-* Streaming file downloads to prevent server memory bloat on large files.
-* Dynamic sorting by size, date, file type, and ML category.
+### 19.1 Basic File Upload & Metadata Persistence `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (12/12 integration and unit tests passing; 92/92 total backend tests passing).
+* **Endpoints:**
+  - `POST /api/files/upload`: Uploads a file via `multipart/form-data`.
+  - `GET /api/files`: Lists files owned by the authenticated user.
+* **Upload Pipeline Flow:**
+  1. **Authentication:** Request verified through `@jwt_required` middleware; validates JWT claims and retrieves active `User` entity attached to `flask.g.current_user`.
+  2. **Multipart Inspection:** Validates request has `Content-Type: multipart/form-data` and contains a non-empty `file` part. Rejects missing part with HTTP 400 (`NO_FILE_PART`) and empty filename with HTTP 400 (`NO_FILE_SELECTED`).
+  3. **Stream Size & Extension Validation:**
+     - Computes size from stream pointer without reading whole file into memory.
+     - Enforces maximum upload ceiling (50 MB default). Rejects oversize files with HTTP 400 (`FILE_VALIDATION_ERROR`).
+     - Extracts and normalizes original filename via Werkzeug `secure_filename`.
+  4. **Object Storage Streaming (MinIO):**
+     - Generates isolated storage key: `user-files/{user_id}/{uuid4}_{secure_filename}`.
+     - Streams binary data directly to MinIO bucket via `storage_service.client.put_object(...)`.
+  5. **Metadata Persistence (MongoDB):**
+     - Instantiates `FileMetadata` domain entity (`user_id`, `original_name`, `storage_key`, `content_type`, `size`, `created_at`, `updated_at`).
+     - Inserts document into MongoDB `files` collection.
+  6. **Compensating Rollback on Failure:**
+     - If MongoDB persistence fails after MinIO upload, executes `storage_service.client.remove_object(...)` to immediately delete the orphaned object.
+  7. **Sanitized Response:** Returns HTTP 201 Created with clean JSON file representation (`id`, `user_id`, `original_name`, `storage_key`, `content_type`, `size`, `created_at`).
+* **File Listing Flow (`GET /api/files`):**
+  - Queries `files` collection filtered strictly by `user_id == current_user._id`, sorted newest first (`created_at: -1`).
+  - Guarantees complete multi-tenant tenant data isolation.
+* **Frontend Dashboard Integration:**
+  - React `Dashboard.jsx` displays file selector button `[ Choose File ]`, chosen file summary, and `[ Upload ]` action with loading spinner.
+  - Success and error feedback banners for intuitive UX.
+  - "My Files" list view displays filename, formatted file size (Bytes/KB/MB), MIME badge, and formatted upload date.
+
 
 ---
 

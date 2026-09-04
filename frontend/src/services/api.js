@@ -100,4 +100,43 @@ export const getMeApi = async () => {
   }
 };
 
+// File Management API calls
+export const uploadFileApi = async (file) => {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await apiClient.post('/files/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        message: error.response?.data?.error?.message || error.message || 'File upload failed',
+        code: error.response?.data?.error?.code || 'UPLOAD_ERROR',
+      },
+    };
+  }
+};
+
+export const getFilesApi = async () => {
+  try {
+    const response = await apiClient.get('/files');
+    return response.data;
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        message: error.response?.data?.error?.message || error.message || 'Failed to fetch files',
+        code: error.response?.data?.error?.code || 'FETCH_FILES_ERROR',
+      },
+    };
+  }
+};
+
 export default apiClient;
+
