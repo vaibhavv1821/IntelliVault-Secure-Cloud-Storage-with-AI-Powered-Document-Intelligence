@@ -1,14 +1,21 @@
 """
 IntelliVault ~ File Management API Routes
-Provides endpoints for secure file upload and file metadata querying.
+Provides endpoints for secure file upload, file querying, download, and deletion.
 """
 
-from flask import Blueprint, request, g
+import io
+from flask import Blueprint, request, g, send_file
 from backend.app.services.file_service import (
     upload_file,
+    download_file,
+    delete_file,
     get_user_files,
     FileValidationError,
-    FileUploadError
+    FileUploadError,
+    FileNotFoundServiceError,
+    FileAccessDeniedError,
+    FileStorageDownloadError,
+    FileStorageDeleteError
 )
 from backend.app.utils.security import jwt_required
 from backend.app.utils.response import success_response, error_response
@@ -90,5 +97,104 @@ def list_files():
         return error_response(
             message="An unexpected error occurred while retrieving user files.",
             error_code="FILES_RETRIEVAL_FAILED",
+            status_code=500
+        )
+
+
+@files_bp.route("/<file_id>/download", methods=["GET"])
+@jwt_required
+def handle_file_download(file_id: str):
+    """
+    Downloads a file owned by the authenticated user.
+    Streams the binary file content with original filename and MIME type.
+    """
+    try:
+        user = g.current_user
+        file_bytes, file_record = download_file(file_id=file_id, user_id=user._id)
+
+        return send_file(
+            io.BytesIO(file_bytes),
+            mimetype=file_record.content_type,
+            as_attachment=True,
+            download_name=file_record.original_name
+        )
+    except FileValidationError as val_err:
+        return error_response(
+            message=str(val_err),
+            error_code="INVALID_FILE_ID",
+            status_code=400
+        )
+    except FileNotFoundServiceError as nf_err:
+        return error_response(
+            message=str(nf_err),
+            error_code="FILE_NOT_FOUND",
+            status_code=404
+        )
+    except FileAccessDeniedError as denied_err:
+        return error_response(
+            message=str(denied_err),
+            error_code="FORBIDDEN",
+            status_code=403
+        )
+    except FileStorageDownloadError as store_err:
+        logger.error(f"Storage download error for file '{file_id}': {store_err}", exc_info=True)
+        return error_response(
+            message=str(store_err),
+            error_code="STORAGE_ERROR",
+            status_code=500
+        )
+    except Exception as err:
+        logger.error(f"Unexpected error during file download for '{file_id}': {err}", exc_info=True)
+        return error_response(
+            message="An unexpected error occurred while downloading the file.",
+            error_code="DOWNLOAD_FAILED",
+            status_code=500
+        )
+
+
+@files_bp.route("/<file_id>", methods=["DELETE"])
+@jwt_required
+def handle_file_delete(file_id: str):
+    """
+    Deletes a file owned by the authenticated user from both MinIO and MongoDB.
+    """
+    try:
+        user = g.current_user
+        deleted_id = delete_file(file_id=file_id, user_id=user._id)
+        return success_response(
+            data={"file_id": deleted_id},
+            message="File deleted successfully.",
+            status_code=200
+        )
+    except FileValidationError as val_err:
+        return error_response(
+            message=str(val_err),
+            error_code="INVALID_FILE_ID",
+            status_code=400
+        )
+    except FileNotFoundServiceError as nf_err:
+        return error_response(
+            message=str(nf_err),
+            error_code="FILE_NOT_FOUND",
+            status_code=404
+        )
+    except FileAccessDeniedError as denied_err:
+        return error_response(
+            message=str(denied_err),
+            error_code="FORBIDDEN",
+            status_code=403
+        )
+    except FileStorageDeleteError as store_err:
+        logger.error(f"Storage delete error for file '{file_id}': {store_err}", exc_info=True)
+        return error_response(
+            message=str(store_err),
+            error_code="STORAGE_ERROR",
+            status_code=500
+        )
+    except Exception as err:
+        logger.error(f"Unexpected error during file deletion for '{file_id}': {err}", exc_info=True)
+        return error_response(
+            message="An unexpected error occurred while deleting the file.",
+            error_code="DELETE_FAILED",
             status_code=500
         )

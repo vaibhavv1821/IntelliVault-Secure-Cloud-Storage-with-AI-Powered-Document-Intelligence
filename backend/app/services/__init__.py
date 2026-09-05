@@ -18,11 +18,17 @@ from backend.app.services.auth_service import (
 
 from backend.app.services.file_service import (
     upload_file,
+    download_file,
+    delete_file,
     get_user_files,
     ensure_file_indexes,
     FileServiceError,
     FileValidationError,
-    FileUploadError
+    FileUploadError,
+    FileNotFoundServiceError,
+    FileAccessDeniedError,
+    FileStorageDownloadError,
+    FileStorageDeleteError
 )
 
 __all__ = [
@@ -38,10 +44,17 @@ __all__ = [
     "InvalidCredentialsError",
     "AccountDisabledError",
     "upload_file",
+    "download_file",
+    "delete_file",
     "get_user_files",
     "ensure_file_indexes",
     "FileServiceError",
     "FileValidationError",
-    "FileUploadError"
+    "FileUploadError",
+    "FileNotFoundServiceError",
+    "FileAccessDeniedError",
+    "FileStorageDownloadError",
+    "FileStorageDeleteError"
 ]
+
 

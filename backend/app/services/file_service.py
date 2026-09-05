@@ -31,6 +31,27 @@ class FileUploadError(FileServiceError):
     pass
 
 
+class FileNotFoundServiceError(FileServiceError):
+    """Raised when a requested file record does not exist in the database."""
+    pass
+
+
+class FileAccessDeniedError(FileServiceError):
+    """Raised when a user attempts to access a file they do not own."""
+    pass
+
+
+class FileStorageDownloadError(FileServiceError):
+    """Raised when retrieving a file binary stream from MinIO fails."""
+    pass
+
+
+class FileStorageDeleteError(FileServiceError):
+    """Raised when deleting a file from MinIO or MongoDB fails."""
+    pass
+
+
+
 def ensure_file_indexes():
     """Creates indexes on the files collection for fast user queries and key uniqueness."""
     try:
@@ -149,3 +170,109 @@ def get_user_files(user_id: ObjectId | str) -> list[dict]:
             results.append(record.to_dict())
 
     return results
+
+
+def download_file(file_id: str, user_id: ObjectId | str) -> tuple[bytes, FileMetadata]:
+    """
+    Retrieves and streams file content from MinIO after verifying user ownership.
+
+    :param file_id: Hex string or ObjectId of the target file.
+    :param user_id: Hex string or ObjectId of the requesting user.
+    :return: Tuple of (file_bytes, FileMetadata).
+    :raises FileValidationError: If file_id is invalid format.
+    :raises FileNotFoundServiceError: If file record does not exist in database.
+    :raises FileAccessDeniedError: If requesting user is not the file owner.
+    :raises FileStorageDownloadError: If MinIO retrieval fails.
+    """
+    if not file_id or not isinstance(file_id, (str, ObjectId)):
+        raise FileValidationError("File ID must be provided.")
+    if isinstance(file_id, str) and not ObjectId.is_valid(file_id):
+        raise FileValidationError("Invalid file ID format.")
+
+    file_oid = ObjectId(file_id)
+    user_oid = ObjectId(user_id) if isinstance(user_id, str) and ObjectId.is_valid(user_id) else user_id
+
+    files_col = db_service.get_collection("files")
+    doc = files_col.find_one({"_id": file_oid})
+    if not doc:
+        raise FileNotFoundServiceError(f"File with ID '{file_id}' not found.")
+
+    if doc.get("user_id") != user_oid:
+        raise FileAccessDeniedError("Access denied: You do not have permission to access this file.")
+
+    file_record = FileMetadata.from_db(doc)
+    bucket_name = storage_service.bucket_name or "intellivault-files"
+
+    if not storage_service.client:
+        raise FileStorageDownloadError("Object storage client is not initialized.")
+
+    try:
+        response = storage_service.client.get_object(bucket_name, file_record.storage_key)
+        try:
+            file_bytes = response.read()
+        finally:
+            if hasattr(response, "close"):
+                response.close()
+            if hasattr(response, "release_conn"):
+                response.release_conn()
+        return file_bytes, file_record
+    except Exception as e:
+        logger.error(f"Failed to retrieve object '{file_record.storage_key}' from MinIO: {e}", exc_info=True)
+        raise FileStorageDownloadError(f"Failed to retrieve file from object storage: {e}")
+
+
+def delete_file(file_id: str, user_id: ObjectId | str) -> str:
+    """
+    Deletes an object from MinIO and deletes its metadata from MongoDB.
+    Enforces user ownership and atomic consistency (does not delete metadata if storage removal fails).
+
+    :param file_id: Hex string or ObjectId of the target file.
+    :param user_id: Hex string or ObjectId of the requesting user.
+    :return: The deleted file_id string.
+    :raises FileValidationError: If file_id is invalid format.
+    :raises FileNotFoundServiceError: If file record does not exist in database.
+    :raises FileAccessDeniedError: If requesting user is not the file owner.
+    :raises FileStorageDeleteError: If MinIO deletion fails.
+    """
+    if not file_id or not isinstance(file_id, (str, ObjectId)):
+        raise FileValidationError("File ID must be provided.")
+    if isinstance(file_id, str) and not ObjectId.is_valid(file_id):
+        raise FileValidationError("Invalid file ID format.")
+
+    file_oid = ObjectId(file_id)
+    user_oid = ObjectId(user_id) if isinstance(user_id, str) and ObjectId.is_valid(user_id) else user_id
+
+    files_col = db_service.get_collection("files")
+    doc = files_col.find_one({"_id": file_oid})
+    if not doc:
+        raise FileNotFoundServiceError(f"File with ID '{file_id}' not found.")
+
+    if doc.get("user_id") != user_oid:
+        raise FileAccessDeniedError("Access denied: You do not have permission to delete this file.")
+
+    file_record = FileMetadata.from_db(doc)
+    bucket_name = storage_service.bucket_name or "intellivault-files"
+
+    if not storage_service.client:
+        raise FileStorageDeleteError("Object storage client is not initialized.")
+
+    # 1. Delete object from MinIO first
+    try:
+        storage_service.client.remove_object(bucket_name, file_record.storage_key)
+        logger.info(f"Object '{file_record.storage_key}' removed from MinIO bucket '{bucket_name}'.")
+    except Exception as e:
+        logger.error(f"Failed to delete object '{file_record.storage_key}' from MinIO: {e}", exc_info=True)
+        raise FileStorageDeleteError(f"Failed to delete file from object storage: {e}")
+
+    # 2. Remove metadata from MongoDB
+    try:
+        delete_result = files_col.delete_one({"_id": file_oid, "user_id": user_oid})
+        if delete_result.deleted_count == 0:
+            raise FileStorageDeleteError("Failed to remove file metadata from database.")
+        logger.info(f"File metadata for ID '{file_id}' removed from MongoDB.")
+    except Exception as db_err:
+        logger.error(f"Database error deleting file metadata for ID '{file_id}': {db_err}", exc_info=True)
+        raise FileStorageDeleteError(f"Failed to remove file record from database: {db_err}")
+
+    return str(file_id)
+

@@ -89,8 +89,11 @@ IntelliVault solves these dilemmas by combining application-level envelope encry
 | F06c| Auth Middleware & Protected Dashboard | Phase 1 | **IMPLEMENTED** | **TESTED** (9 Integration Tests) |
 | F06d| Role-Based Access Control (RBAC) | Phase 1 | `PLANNED` | Unverified |
 | F07 | Basic File Upload & Metadata | Phase 1 | **IMPLEMENTED** | **TESTED** (12 Integration Tests) |
-| F07b| File Download & Streaming | Phase 1 | `PLANNED` | Unverified |
+| F07b| File Download & Streaming | Phase 1 | **IMPLEMENTED** | **TESTED** (6 Integration Tests) |
+| F07c| File Deletion & Consistency | Phase 1 | **IMPLEMENTED** | **TESTED** (6 Integration Tests) |
 | F08 | AES-256 GCM File Encryption | Phase 1 | `PLANNED` | Unverified |
+
+
 
 | F09 | Folder Hierarchy & Movement | Phase 1 | `PLANNED` | Unverified |
 | F10 | File Versioning Engine | Phase 1 | `PLANNED` | Unverified |
@@ -555,6 +558,42 @@ Three built-in hierarchical roles:
   - React `Dashboard.jsx` displays file selector button `[ Choose File ]`, chosen file summary, and `[ Upload ]` action with loading spinner.
   - Success and error feedback banners for intuitive UX.
   - "My Files" list view displays filename, formatted file size (Bytes/KB/MB), MIME badge, and formatted upload date.
+
+### 19.2 File Download & Streaming `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (6/6 download integration tests passing).
+* **Endpoint:** `GET /api/files/<file_id>/download`
+* **Download Pipeline Flow:**
+  1. **Authentication:** Authenticated via `@jwt_required` extracting requesting user identity.
+  2. **Identifier Validation:** Validates `file_id` as standard 24-character hexadecimal MongoDB `ObjectId`. Rejects invalid format with HTTP 400 (`INVALID_FILE_ID`).
+  3. **Strict Ownership Verification:**
+     - Queries MongoDB `files` collection by `_id`. Returns HTTP 404 (`FILE_NOT_FOUND`) if record does not exist.
+     - Enforces ownership: verifies `doc.user_id == current_user._id`. Rejects unauthorized cross-user download attempts with HTTP 403 (`FORBIDDEN`).
+  4. **Object Storage Stream Retrieval:**
+     - Retrieves binary stream from MinIO bucket via `storage_service.client.get_object(bucket_name, storage_key)`.
+     - Catches connection/storage errors returning HTTP 500 (`STORAGE_ERROR`).
+  5. **Response Construction:**
+     - Transmits file via Flask `send_file`, setting `Content-Type` to the file's verified MIME type and `Content-Disposition: attachment; filename="<original_name>"`.
+     - Preserves original filename without exposing internal MinIO storage keys or credentials.
+* **Frontend Integration:**
+  - Action button `[Download]` on each file row triggers authenticated blob download and saves with original filename.
+
+### 19.3 File Deletion & Storage Consistency `[IMPLEMENTED & TESTED]`
+* **Status:** IMPLEMENTED and TESTED (6/6 deletion integration tests passing).
+* **Endpoint:** `DELETE /api/files/<file_id>`
+* **Deletion Pipeline Flow:**
+  1. **Authentication & Ownership Check:** Protected by `@jwt_required`. Verifies file exists (HTTP 404 if not found) and confirms requesting user ownership (HTTP 403 if attempting to delete another user's file).
+  2. **MinIO Object Deletion (Storage-First):**
+     - Deletes binary object from MinIO via `storage_service.client.remove_object(bucket_name, storage_key)`.
+     - If MinIO deletion fails, raises `FileStorageDeleteError` and aborts deletion pipeline before altering database metadata.
+  3. **Metadata Deletion (MongoDB):**
+     - Executes `files_col.delete_one({"_id": file_oid, "user_id": user_oid})`.
+     - Atomic guarantee: metadata is never deleted if object deletion fails, avoiding dangling or unrecoverable states.
+  4. **Response:** Returns HTTP 200 OK with `{ "file_id": "<id>" }` and confirmation message.
+* **Frontend Integration:**
+  - Action button `[Delete]` with trash icon on each file row.
+  - Native confirmation dialog prompt before execution to prevent accidental deletion.
+  - Automatically refreshes files list on successful deletion with feedback alerts.
+
 
 
 ---

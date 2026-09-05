@@ -138,5 +138,63 @@ export const getFilesApi = async () => {
   }
 };
 
+export const downloadFileApi = async (fileId, originalName) => {
+  try {
+    const response = await apiClient.get(`/files/${fileId}/download`, {
+      responseType: 'blob',
+    });
+
+    const blob = new Blob([response.data], {
+      type: response.headers['content-type'] || 'application/octet-stream',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', originalName || 'downloaded_file');
+    document.body.appendChild(link);
+    link.click();
+    link.parentNode.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    return { success: true };
+  } catch (error) {
+    let errorMessage = 'Failed to download file';
+    if (error.response?.data instanceof Blob) {
+      try {
+        const errorText = await error.response.data.text();
+        const parsed = JSON.parse(errorText);
+        errorMessage = parsed.error?.message || errorMessage;
+      } catch {
+        // fallback
+      }
+    } else {
+      errorMessage = error.response?.data?.error?.message || error.message || errorMessage;
+    }
+    return {
+      success: false,
+      error: {
+        message: errorMessage,
+        code: error.response?.data?.error?.code || 'DOWNLOAD_ERROR',
+      },
+    };
+  }
+};
+
+export const deleteFileApi = async (fileId) => {
+  try {
+    const response = await apiClient.delete(`/files/${fileId}`);
+    return response.data;
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        message: error.response?.data?.error?.message || error.message || 'Failed to delete file',
+        code: error.response?.data?.error?.code || 'DELETE_ERROR',
+      },
+    };
+  }
+};
+
 export default apiClient;
+
 

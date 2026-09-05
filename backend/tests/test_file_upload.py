@@ -28,6 +28,22 @@ from backend.app.services.storage import storage_service
 from backend.app.utils.security import hash_password, generate_access_token
 
 
+class MockMinioResponse:
+    """Mock HTTP response stream from MinIO."""
+
+    def __init__(self, data: bytes):
+        self._io = io.BytesIO(data)
+
+    def read(self, *args, **kwargs):
+        return self._io.read(*args, **kwargs)
+
+    def close(self):
+        self._io.close()
+
+    def release_conn(self):
+        pass
+
+
 class MockMinioClient:
     """In-memory mock for MinIO object storage client."""
 
@@ -35,6 +51,7 @@ class MockMinioClient:
         self.objects = {}
         self.put_object_calls = []
         self.remove_object_calls = []
+        self.get_object_calls = []
 
     def put_object(self, bucket_name, object_name, data, length, content_type="application/octet-stream"):
         content = data.read(length) if hasattr(data, "read") else data
@@ -51,12 +68,23 @@ class MockMinioClient:
         })
         return MagicMock()
 
+    def get_object(self, bucket_name, object_name):
+        self.get_object_calls.append({
+            "bucket": bucket_name,
+            "key": object_name
+        })
+        key = (bucket_name, object_name)
+        if key not in self.objects:
+            raise RuntimeError(f"Object '{object_name}' not found in bucket '{bucket_name}'.")
+        return MockMinioResponse(self.objects[key]["content"])
+
     def remove_object(self, bucket_name, object_name):
         self.remove_object_calls.append({
             "bucket": bucket_name,
             "key": object_name
         })
         self.objects.pop((bucket_name, object_name), None)
+
 
 
 @pytest.fixture
@@ -416,3 +444,271 @@ def test_mongodb_failure_rolls_back_minio(file_client, monkeypatch):
     # Verify rollback: remove_object was called for the uploaded object key
     assert len(mock_minio.remove_object_calls) == 1
     assert mock_minio.remove_object_calls[0]["key"] == uploaded_key
+
+
+# ==============================================================================
+# DOWNLOAD TESTS (Step 6)
+# ==============================================================================
+
+def test_download_file_success(file_client):
+    """Test 13: Authenticated owner downloads file; matches content, content-type, and filename."""
+    client, alice, _, mock_minio, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    file_content = b"%PDF-1.4 Mock PDF Stream for IntelliVault Download Test"
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(file_content), "specs_v1.pdf", "application/pdf")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert upload_res.status_code == 201
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    download_res = client.get(
+        f"/api/files/{file_id}/download",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert download_res.status_code == 200
+    assert download_res.data == file_content
+    assert "application/pdf" in download_res.content_type
+    assert 'filename="specs_v1.pdf"' in download_res.headers.get("Content-Disposition", "") or \
+           'filename=specs_v1.pdf' in download_res.headers.get("Content-Disposition", "")
+
+
+def test_download_file_unauthenticated_fails(file_client):
+    """Test 14: GET /api/files/<file_id>/download without token returns HTTP 401."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Data"), "file.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    # Request without Authorization header
+    response = client.get(f"/api/files/{file_id}/download")
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "MISSING_TOKEN"
+
+
+def test_download_file_invalid_id_fails(file_client):
+    """Test 15: GET /api/files/<invalid_id>/download with malformed ObjectId returns HTTP 400."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    response = client.get(
+        "/api/files/invalid-hex-id-12345/download",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "INVALID_FILE_ID"
+
+
+def test_download_file_nonexistent_id_fails(file_client):
+    """Test 16: GET /api/files/<nonexistent_id>/download returns HTTP 404."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    nonexistent_id = str(ObjectId())
+    response = client.get(
+        f"/api/files/{nonexistent_id}/download",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "FILE_NOT_FOUND"
+
+
+def test_download_file_unauthorized_cross_user_fails(file_client):
+    """Test 17: User B cannot download User A's file (returns HTTP 403)."""
+    client, alice, bob, _, _, app = file_client
+    alice_token = create_auth_token(alice, app)
+    bob_token = create_auth_token(bob, app)
+
+    # Alice uploads a private file
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Alice Confidential Document"), "alice_private.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {alice_token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    # Bob attempts to download Alice's file
+    response = client.get(
+        f"/api/files/{file_id}/download",
+        headers={"Authorization": f"Bearer {bob_token}"}
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_download_file_storage_error(file_client, monkeypatch):
+    """Test 18: MinIO failure during download returns HTTP 500 STORAGE_ERROR."""
+    client, alice, _, mock_minio, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Test Stream"), "data.bin", "application/octet-stream")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    def failing_get_object(bucket_name, object_name):
+        raise RuntimeError("MinIO connection reset during stream read")
+
+    monkeypatch.setattr(mock_minio, "get_object", failing_get_object)
+
+    response = client.get(
+        f"/api/files/{file_id}/download",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 500
+    assert response.get_json()["error"]["code"] == "STORAGE_ERROR"
+
+
+# ==============================================================================
+# DELETE TESTS (Step 6)
+# ==============================================================================
+
+def test_delete_file_success(file_client):
+    """Test 19: Authenticated owner deletes a file; removes from MinIO and MongoDB."""
+    client, alice, _, mock_minio, mock_db, app = file_client
+    token = create_auth_token(alice, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"File to be deleted"), "delete_me.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert upload_res.status_code == 201
+    file_data = upload_res.get_json()["data"]["file"]
+    file_id = file_data["id"]
+    storage_key = file_data["storage_key"]
+
+    # Verify present in MongoDB before delete
+    assert mock_db["files"].find_one({"_id": ObjectId(file_id)}) is not None
+
+    delete_res = client.delete(
+        f"/api/files/{file_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert delete_res.status_code == 200
+    payload = delete_res.get_json()
+    assert payload["success"] is True
+    assert payload["data"]["file_id"] == file_id
+
+    # Verify removed from MongoDB
+    assert mock_db["files"].find_one({"_id": ObjectId(file_id)}) is None
+
+    # Verify remove_object was called on MinIO with correct storage key
+    deleted_keys = [c["key"] for c in mock_minio.remove_object_calls]
+    assert storage_key in deleted_keys
+
+
+def test_delete_file_unauthenticated_fails(file_client):
+    """Test 20: DELETE /api/files/<file_id> without token returns HTTP 401."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Unauth test"), "unauth_del.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    response = client.delete(f"/api/files/{file_id}")
+    assert response.status_code == 401
+    assert response.get_json()["error"]["code"] == "MISSING_TOKEN"
+
+
+def test_delete_file_invalid_id_fails(file_client):
+    """Test 21: DELETE /api/files/<invalid_id> returns HTTP 400."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    response = client.delete(
+        "/api/files/not-a-valid-object-id",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "INVALID_FILE_ID"
+
+
+def test_delete_file_nonexistent_id_fails(file_client):
+    """Test 22: DELETE /api/files/<nonexistent_id> returns HTTP 404."""
+    client, alice, _, _, _, app = file_client
+    token = create_auth_token(alice, app)
+
+    nonexistent_id = str(ObjectId())
+    response = client.delete(
+        f"/api/files/{nonexistent_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 404
+    assert response.get_json()["error"]["code"] == "FILE_NOT_FOUND"
+
+
+def test_delete_file_unauthorized_cross_user_fails(file_client):
+    """Test 23: User B cannot delete User A's file (returns HTTP 403); file preserved in MongoDB."""
+    client, alice, bob, _, mock_db, app = file_client
+    alice_token = create_auth_token(alice, app)
+    bob_token = create_auth_token(bob, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Alice critical file"), "alice_critical.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {alice_token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    # Bob attempts to delete Alice's file
+    response = client.delete(
+        f"/api/files/{file_id}",
+        headers={"Authorization": f"Bearer {bob_token}"}
+    )
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "FORBIDDEN"
+
+    # Crucial security check: file is still in MongoDB
+    assert mock_db["files"].find_one({"_id": ObjectId(file_id)}) is not None
+
+
+def test_delete_file_minio_failure_preserves_db_metadata(file_client, monkeypatch):
+    """Test 24: MinIO deletion failure returns HTTP 500 and preserves MongoDB metadata."""
+    client, alice, _, mock_minio, mock_db, app = file_client
+    token = create_auth_token(alice, app)
+
+    upload_res = client.post(
+        "/api/files/upload",
+        data={"file": (io.BytesIO(b"Data before MinIO fail"), "stay_in_db.txt", "text/plain")},
+        content_type="multipart/form-data",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    file_id = upload_res.get_json()["data"]["file"]["id"]
+
+    # MinIO fails during delete
+    def failing_remove_object(bucket_name, object_name):
+        raise RuntimeError("MinIO object lock prevents deletion")
+
+    monkeypatch.setattr(mock_minio, "remove_object", failing_remove_object)
+
+    response = client.delete(
+        f"/api/files/{file_id}",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 500
+    assert response.get_json()["error"]["code"] == "STORAGE_ERROR"
+
+    # Consistency check: MongoDB record must NOT be deleted if storage delete failed
+    assert mock_db["files"].find_one({"_id": ObjectId(file_id)}) is not None
+

@@ -8,9 +8,16 @@ import {
   User,
   Loader2,
   AlertCircle,
-  HardDrive
+  HardDrive,
+  Download,
+  Trash2
 } from 'lucide-react';
-import { uploadFileApi, getFilesApi } from '../services/api';
+import {
+  uploadFileApi,
+  getFilesApi,
+  downloadFileApi,
+  deleteFileApi
+} from '../services/api';
 
 export const Dashboard = ({ user, onLogout }) => {
   const [files, setFiles] = useState([]);
@@ -21,6 +28,11 @@ export const Dashboard = ({ user, onLogout }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [uploadSuccess, setUploadSuccess] = useState(null);
+
+  const [downloadingFileId, setDownloadingFileId] = useState(null);
+  const [deletingFileId, setDeletingFileId] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [actionSuccess, setActionSuccess] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -62,6 +74,8 @@ export const Dashboard = ({ user, onLogout }) => {
     setIsUploading(true);
     setUploadError(null);
     setUploadSuccess(null);
+    setActionError(null);
+    setActionSuccess(null);
 
     const res = await uploadFileApi(selectedFile);
     setIsUploading(false);
@@ -75,6 +89,40 @@ export const Dashboard = ({ user, onLogout }) => {
       fetchFiles();
     } else {
       setUploadError(res.error?.message || 'Upload failed. Please check server logs.');
+    }
+  };
+
+  const handleDownload = async (file) => {
+    setDownloadingFileId(file.id);
+    setActionError(null);
+    setActionSuccess(null);
+
+    const res = await downloadFileApi(file.id, file.original_name);
+    setDownloadingFileId(null);
+
+    if (!res.success) {
+      setActionError(res.error?.message || `Failed to download "${file.original_name}".`);
+    }
+  };
+
+  const handleDelete = async (file) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${file.original_name}"?\nThis action will remove the file from storage and database permanently.`
+    );
+    if (!confirmed) return;
+
+    setDeletingFileId(file.id);
+    setActionError(null);
+    setActionSuccess(null);
+
+    const res = await deleteFileApi(file.id);
+    setDeletingFileId(null);
+
+    if (res.success) {
+      setActionSuccess(`"${file.original_name}" was deleted successfully.`);
+      fetchFiles();
+    } else {
+      setActionError(res.error?.message || `Failed to delete "${file.original_name}".`);
     }
   };
 
@@ -243,6 +291,20 @@ export const Dashboard = ({ user, onLogout }) => {
           </button>
         </div>
 
+        {actionError && (
+          <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-400 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+        )}
+
+        {actionSuccess && (
+          <div className="p-3 mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{actionSuccess}</span>
+          </div>
+        )}
+
         {fetchError && (
           <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-400 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
@@ -274,24 +336,56 @@ export const Dashboard = ({ user, onLogout }) => {
                 key={file.id}
                 className="py-3.5 px-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-800/20 rounded-xl transition"
               >
-                <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="p-2 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 shrink-0">
                     <FileText className="w-4 h-4" />
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-200 truncate">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-200 truncate" title={file.original_name}>
                       {file.original_name}
                     </p>
                     <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
                       <span className="font-mono">{formatBytes(file.size)}</span>
                       <span>•</span>
-                      <span className="truncate">{file.content_type}</span>
+                      <span className="truncate max-w-[140px] sm:max-w-[200px]">{file.content_type}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="text-xs text-slate-400 sm:text-right shrink-0">
-                  <span>{formatDate(file.created_at)}</span>
+                <div className="flex items-center gap-2 sm:self-center shrink-0">
+                  <span className="text-xs text-slate-400 hidden lg:inline mr-2">
+                    {formatDate(file.created_at)}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(file)}
+                    disabled={downloadingFileId === file.id || deletingFileId === file.id}
+                    title="Download file"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition active:scale-95 disabled:opacity-50"
+                  >
+                    {downloadingFileId === file.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-400" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5 text-teal-400" />
+                    )}
+                    <span>Download</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(file)}
+                    disabled={downloadingFileId === file.id || deletingFileId === file.id}
+                    title="Delete file"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/30 transition active:scale-95 disabled:opacity-50"
+                  >
+                    {deletingFileId === file.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                    <span>Delete</span>
+                  </button>
                 </div>
               </div>
             ))}
