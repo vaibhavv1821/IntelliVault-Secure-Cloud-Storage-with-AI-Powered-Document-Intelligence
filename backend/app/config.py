@@ -25,7 +25,7 @@ class Config:
     # MongoDB
     MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://127.0.0.1:27017/intellivault")
     MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "intellivault")
-    MONGODB_CONNECT_TIMEOUT_MS = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", 2000))
+    MONGODB_CONNECT_TIMEOUT_MS = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", 10000))
 
     # MinIO / S3 Object Storage
     MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "127.0.0.1:9000")
