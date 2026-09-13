@@ -22,4 +22,4 @@ if __name__ == "__main__":
     debug = app.config.get("DEBUG", True)
 
     logger.info(f"Starting IntelliVault Server at http://{host}:{port} (Debug: {debug})")
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

@@ -3,7 +3,7 @@ import axios from 'axios';
 // Base API instance configured for /api
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  timeout: 5000,
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -106,10 +106,12 @@ export const uploadFileApi = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
 
+    // Do NOT manually set Content-Type here.
+    // Axios + FormData will automatically set:
+    //   Content-Type: multipart/form-data; boundary=<generated-boundary>
+    // Manually setting it would omit the boundary and break multipart parsing on Flask.
     const response = await apiClient.post('/files/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
+      timeout: 30000, // 30 seconds for file uploads (PDFs can be large)
     });
     return response.data;
   } catch (error) {
