@@ -1,6 +1,6 @@
-"""
+﻿"""
 IntelliVault ~ File Storage & Metadata Service
-Orchestrates file validation, MinIO binary stream storage, MongoDB metadata persistence,
+Orchestrates file validation, Supabase Storage binary upload, MongoDB metadata persistence,
 and rollback mechanisms to eliminate orphaned storage objects.
 """
 
@@ -42,14 +42,13 @@ class FileAccessDeniedError(FileServiceError):
 
 
 class FileStorageDownloadError(FileServiceError):
-    """Raised when retrieving a file binary stream from MinIO fails."""
+    """Raised when retrieving a file binary stream from Supabase Storage fails."""
     pass
 
 
 class FileStorageDeleteError(FileServiceError):
-    """Raised when deleting a file from MinIO or MongoDB fails."""
+    """Raised when deleting a file from Supabase Storage or MongoDB fails."""
     pass
-
 
 
 def ensure_file_indexes():
@@ -63,9 +62,9 @@ def ensure_file_indexes():
         logger.debug(f"File index creation deferred or already exists: {e}")
 
 
-def upload_file(file_storage: FileStorage, user_id: ObjectId | str) -> dict:
+def upload_file(file_storage: FileStorage, user_id) -> dict:
     """
-    Validates, streams to MinIO, and records metadata in MongoDB for an uploaded file.
+    Validates, uploads to Supabase Storage, and records metadata in MongoDB.
     Performs rollback on storage if database persistence fails.
 
     :param file_storage: Flask/Werkzeug FileStorage object.
@@ -84,10 +83,10 @@ def upload_file(file_storage: FileStorage, user_id: ObjectId | str) -> dict:
     if not safe_name:
         safe_name = "unnamed_file"
 
-    # Compute stream size by seeking to end and restoring pointer
-    file_storage.seek(0, os.SEEK_END)
-    size_bytes = file_storage.tell()
+    # Read the entire file into memory (max 50 MB)
     file_storage.seek(0)
+    file_data = file_storage.read()
+    size_bytes = len(file_data)
 
     if size_bytes > MAX_FILE_SIZE_BYTES:
         raise FileValidationError(
@@ -98,29 +97,21 @@ def upload_file(file_storage: FileStorage, user_id: ObjectId | str) -> dict:
     user_oid = ObjectId(user_id) if isinstance(user_id, str) and ObjectId.is_valid(user_id) else user_id
     user_id_str = str(user_oid)
 
-    # Generate unique collision-resistant storage key
+    # Generate unique collision-resistant storage path
     unique_id = uuid.uuid4().hex
     storage_key = f"user-files/{user_id_str}/{unique_id}_{safe_name}"
 
     content_type = getattr(file_storage, "content_type", None) or "application/octet-stream"
-    bucket_name = storage_service.bucket_name or "intellivault-files"
 
-    if not storage_service.client:
-        raise FileUploadError("Storage service client is not initialized.")
+    if not storage_service._initialized:
+        raise FileUploadError("Storage service is not initialized.")
 
-    # 1. Upload binary stream to MinIO
+    # 1. Upload binary data to Supabase Storage
     try:
-        stream = getattr(file_storage, "stream", file_storage)
-        storage_service.client.put_object(
-            bucket_name=bucket_name,
-            object_name=storage_key,
-            data=stream,
-            length=size_bytes,
-            content_type=content_type
-        )
-        logger.info(f"File uploaded to MinIO: '{storage_key}' ({size_bytes} bytes)")
+        storage_service.upload(storage_key, file_data, content_type)
+        logger.info(f"File uploaded to Supabase Storage: '{storage_key}' ({size_bytes} bytes)")
     except Exception as storage_err:
-        logger.error(f"MinIO upload failed for '{storage_key}': {storage_err}", exc_info=True)
+        logger.error(f"Supabase upload failed for '{storage_key}': {storage_err}", exc_info=True)
         raise FileUploadError(f"Failed to store file in object storage: {storage_err}")
 
     # 2. Persist metadata record in MongoDB
@@ -138,13 +129,13 @@ def upload_file(file_storage: FileStorage, user_id: ObjectId | str) -> dict:
         logger.info(f"File metadata saved in MongoDB for id: {file_record._id}")
     except Exception as db_err:
         logger.error(
-            f"MongoDB metadata persistence failed for '{storage_key}': {db_err}. Initiating MinIO rollback...",
+            f"MongoDB metadata persistence failed for '{storage_key}': {db_err}. Initiating storage rollback...",
             exc_info=True
         )
-        # Rollback storage object to prevent orphan leaks
+        # Rollback: remove uploaded object to prevent orphan leaks
         try:
-            storage_service.client.remove_object(bucket_name, storage_key)
-            logger.info(f"MinIO rollback completed successfully for '{storage_key}'.")
+            storage_service.delete(storage_key)
+            logger.info(f"Supabase Storage rollback completed for '{storage_key}'.")
         except Exception as rm_err:
             logger.warning(f"Failed to remove orphaned object '{storage_key}' during rollback: {rm_err}")
         raise FileUploadError(f"Failed to persist file record in database: {db_err}")
@@ -152,7 +143,7 @@ def upload_file(file_storage: FileStorage, user_id: ObjectId | str) -> dict:
     return file_record.to_dict()
 
 
-def get_user_files(user_id: ObjectId | str) -> list[dict]:
+def get_user_files(user_id) -> list:
     """
     Retrieves all file metadata records owned by the specified user, sorted newest first.
 
@@ -172,17 +163,14 @@ def get_user_files(user_id: ObjectId | str) -> list[dict]:
     return results
 
 
-def download_file(file_id: str, user_id: ObjectId | str) -> tuple[bytes, FileMetadata]:
+def download_file(file_id: str, user_id) -> tuple:
     """
-    Retrieves and streams file content from MinIO after verifying user ownership.
+    Downloads file content from Supabase Storage after verifying user ownership.
+    Returns the raw file bytes and metadata so the route can stream them to the client.
 
     :param file_id: Hex string or ObjectId of the target file.
     :param user_id: Hex string or ObjectId of the requesting user.
-    :return: Tuple of (file_bytes, FileMetadata).
-    :raises FileValidationError: If file_id is invalid format.
-    :raises FileNotFoundServiceError: If file record does not exist in database.
-    :raises FileAccessDeniedError: If requesting user is not the file owner.
-    :raises FileStorageDownloadError: If MinIO retrieval fails.
+    :return: Tuple of (file_bytes: bytes, file_record: FileMetadata).
     """
     if not file_id or not isinstance(file_id, (str, ObjectId)):
         raise FileValidationError("File ID must be provided.")
@@ -201,38 +189,26 @@ def download_file(file_id: str, user_id: ObjectId | str) -> tuple[bytes, FileMet
         raise FileAccessDeniedError("Access denied: You do not have permission to access this file.")
 
     file_record = FileMetadata.from_db(doc)
-    bucket_name = storage_service.bucket_name or "intellivault-files"
 
-    if not storage_service.client:
-        raise FileStorageDownloadError("Object storage client is not initialized.")
+    if not storage_service._initialized:
+        raise FileStorageDownloadError("Storage service is not initialized.")
 
     try:
-        response = storage_service.client.get_object(bucket_name, file_record.storage_key)
-        try:
-            file_bytes = response.read()
-        finally:
-            if hasattr(response, "close"):
-                response.close()
-            if hasattr(response, "release_conn"):
-                response.release_conn()
+        file_bytes = storage_service.download(file_record.storage_key)
         return file_bytes, file_record
     except Exception as e:
-        logger.error(f"Failed to retrieve object '{file_record.storage_key}' from MinIO: {e}", exc_info=True)
+        logger.error(f"Failed to download '{file_record.storage_key}' from Supabase Storage: {e}", exc_info=True)
         raise FileStorageDownloadError(f"Failed to retrieve file from object storage: {e}")
 
 
-def delete_file(file_id: str, user_id: ObjectId | str) -> str:
+def delete_file(file_id: str, user_id) -> str:
     """
-    Deletes an object from MinIO and deletes its metadata from MongoDB.
-    Enforces user ownership and atomic consistency (does not delete metadata if storage removal fails).
+    Deletes an object from Supabase Storage and its metadata from MongoDB.
+    Enforces user ownership. Does not delete metadata if storage removal fails.
 
     :param file_id: Hex string or ObjectId of the target file.
     :param user_id: Hex string or ObjectId of the requesting user.
     :return: The deleted file_id string.
-    :raises FileValidationError: If file_id is invalid format.
-    :raises FileNotFoundServiceError: If file record does not exist in database.
-    :raises FileAccessDeniedError: If requesting user is not the file owner.
-    :raises FileStorageDeleteError: If MinIO deletion fails.
     """
     if not file_id or not isinstance(file_id, (str, ObjectId)):
         raise FileValidationError("File ID must be provided.")
@@ -251,17 +227,16 @@ def delete_file(file_id: str, user_id: ObjectId | str) -> str:
         raise FileAccessDeniedError("Access denied: You do not have permission to delete this file.")
 
     file_record = FileMetadata.from_db(doc)
-    bucket_name = storage_service.bucket_name or "intellivault-files"
 
-    if not storage_service.client:
-        raise FileStorageDeleteError("Object storage client is not initialized.")
+    if not storage_service._initialized:
+        raise FileStorageDeleteError("Storage service is not initialized.")
 
-    # 1. Delete object from MinIO first
+    # 1. Delete object from Supabase Storage first
     try:
-        storage_service.client.remove_object(bucket_name, file_record.storage_key)
-        logger.info(f"Object '{file_record.storage_key}' removed from MinIO bucket '{bucket_name}'.")
+        storage_service.delete(file_record.storage_key)
+        logger.info(f"Object '{file_record.storage_key}' removed from Supabase Storage.")
     except Exception as e:
-        logger.error(f"Failed to delete object '{file_record.storage_key}' from MinIO: {e}", exc_info=True)
+        logger.error(f"Failed to delete '{file_record.storage_key}' from Supabase Storage: {e}", exc_info=True)
         raise FileStorageDeleteError(f"Failed to delete file from object storage: {e}")
 
     # 2. Remove metadata from MongoDB
@@ -275,4 +250,3 @@ def delete_file(file_id: str, user_id: ObjectId | str) -> str:
         raise FileStorageDeleteError(f"Failed to remove file record from database: {db_err}")
 
     return str(file_id)
-

@@ -27,12 +27,10 @@ class Config:
     MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "intellivault")
     MONGODB_CONNECT_TIMEOUT_MS = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", 10000))
 
-    # MinIO / S3 Object Storage
-    MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "127.0.0.1:9000")
-    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-    MINIO_BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "intellivault-files")
-    MINIO_SECURE = os.getenv("MINIO_SECURE", "False").lower() in ("true", "1", "t")
+    # Supabase Storage
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+    SUPABASE_BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME", "intellivault-files")
 
     # JWT Authentication
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "intellivault-jwt-signing-secret")
@@ -54,7 +52,7 @@ class TestingConfig(Config):
     TESTING = True
     DEBUG = False
     MONGODB_DB_NAME = "intellivault_test"
-    MINIO_BUCKET_NAME = "intellivault-test-files"
+    SUPABASE_BUCKET_NAME = "intellivault-test-files"
 
 
 class ProductionConfig(Config):
