@@ -4,9 +4,6 @@ import axios from 'axios';
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Storage token helper functions
@@ -22,6 +19,17 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 }, (error) => Promise.reject(error));
+
+// Response interceptor: automatically clear token on 401 Unauthorized
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      clearAuthToken();
+    }
+    return Promise.reject(error);
+  }
+);
 
 // System probes
 export const getHealth = async () => {
@@ -86,6 +94,16 @@ export const loginApi = async (email, password) => {
 };
 
 export const getMeApi = async () => {
+  const token = getAuthToken();
+  if (!token) {
+    return {
+      success: false,
+      error: {
+        message: 'No active session token found',
+        code: 'NO_TOKEN'
+      }
+    };
+  }
   try {
     const response = await apiClient.get('/auth/me');
     return response.data;
@@ -106,12 +124,14 @@ export const uploadFileApi = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
 
-    // Do NOT manually set Content-Type here.
-    // Axios + FormData will automatically set:
+    // Setting Content-Type: undefined ensures Axios removes any default headers
+    // and lets the browser automatically set:
     //   Content-Type: multipart/form-data; boundary=<generated-boundary>
-    // Manually setting it would omit the boundary and break multipart parsing on Flask.
     const response = await apiClient.post('/files/upload', formData, {
       timeout: 30000, // 30 seconds for file uploads (PDFs can be large)
+      headers: {
+        'Content-Type': undefined,
+      },
     });
     return response.data;
   } catch (error) {

@@ -14,7 +14,7 @@ export const PhaseTimeline = () => {
         'Flask REST App Factory',
         'React + Vite + Tailwind Scaffolding',
         'MongoDB Connection Adapter',
-        'MinIO/S3 Storage Health Probe',
+        'Supabase Storage Health Probe',
         'Structured Logger & JSON Error Envelope',
         '55-Section Master Technical Documentation'
       ]

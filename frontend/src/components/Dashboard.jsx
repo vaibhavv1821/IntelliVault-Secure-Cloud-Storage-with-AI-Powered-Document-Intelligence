@@ -325,7 +325,7 @@ export const Dashboard = ({ user, onLogout }) => {
             </div>
             <p className="text-sm font-medium text-slate-300">No files yet.</p>
             <p className="text-xs text-slate-500 max-w-sm mt-1">
-              Select a file above and click Upload to store your documents in MinIO object storage.
+              Select a file above and click Upload to store your documents in secure cloud storage.
             </p>
           </div>
         ) : (

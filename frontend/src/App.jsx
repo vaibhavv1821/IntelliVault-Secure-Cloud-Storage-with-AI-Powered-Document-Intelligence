@@ -115,7 +115,7 @@ export function App() {
                 loading={telemetryLoading}
               />
               <StatusCard
-                title="MinIO Object Storage"
+                title="Supabase Object Storage"
                 type="storage"
                 status={statusData?.data?.services?.storage}
                 loading={telemetryLoading}
