@@ -28,10 +28,10 @@ export const Dashboard = ({ user, onLogout }) => {
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [fetchError, setFetchError] = useState(null);
 
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  const [uploadSuccess, setUploadSuccess] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const [uploadResults, setUploadResults] = useState(null);
 
   const [downloadingFileId, setDownloadingFileId] = useState(null);
   const [deletingFileId, setDeletingFileId] = useState(null);
@@ -63,10 +63,20 @@ export const Dashboard = ({ user, onLogout }) => {
   }, []);
 
   const handleFileChange = (e) => {
-    setUploadError(null);
-    setUploadSuccess(null);
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+    setUploadResults(null);
+    if (e.target.files && e.target.files.length > 0) {
+      setSelectedFiles(Array.from(e.target.files));
+    }
+  };
+
+  const removeSelectedFile = (indexToRemove) => {
+    setSelectedFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const clearSelectedFiles = () => {
+    setSelectedFiles([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -76,29 +86,60 @@ export const Dashboard = ({ user, onLogout }) => {
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!selectedFile) {
-      setUploadError('Please select a file to upload.');
+    if (selectedFiles.length === 0) {
+      setUploadResults({
+        successes: [],
+        errors: ['Please select at least one file to upload.']
+      });
       return;
     }
 
     setIsUploading(true);
-    setUploadError(null);
-    setUploadSuccess(null);
+    setUploadProgress({ current: 0, total: selectedFiles.length });
+    setUploadResults(null);
     setActionError(null);
     setActionSuccess(null);
 
-    const res = await uploadFileApi(selectedFile);
-    setIsUploading(false);
+    const successes = [];
+    const errors = [];
+    const remainingFiles = [];
 
-    if (res.success && res.data?.file) {
-      setUploadSuccess(`"${selectedFile.name}" uploaded successfully!`);
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+    // Upload each selected file independently
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      setUploadProgress({ current: i + 1, total: selectedFiles.length });
+
+      // Client-side validation: 50 MB limit
+      if (file.size > 50 * 1024 * 1024) {
+        errors.push(`"${file.name}" failed: File exceeds maximum allowed limit of 50 MB.`);
+        remainingFiles.push(file);
+        continue;
       }
+
+      const res = await uploadFileApi(file);
+      if (res.success && res.data?.file) {
+        successes.push(`"${file.name}" uploaded successfully.`);
+      } else {
+        const errorMsg = res.error?.message || 'Upload failed.';
+        errors.push(`"${file.name}" failed: ${errorMsg}`);
+        remainingFiles.push(file);
+      }
+    }
+
+    setIsUploading(false);
+    setUploadProgress({ current: 0, total: 0 });
+
+    // Keep failed files selected so user can retry; remove successful ones
+    setSelectedFiles(remainingFiles);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+
+    setUploadResults({ successes, errors });
+
+    // Refresh file listing if at least one file succeeded
+    if (successes.length > 0) {
       fetchFiles();
-    } else {
-      setUploadError(res.error?.message || 'Upload failed. Please check server logs.');
     }
   };
 
@@ -336,74 +377,166 @@ export const Dashboard = ({ user, onLogout }) => {
 
       {/* File Upload Form Card */}
       <div className="p-6 rounded-2xl border border-slate-800 bg-slate-900/60 shadow-xl backdrop-blur-sm mb-8">
-        <div className="flex items-center gap-2 mb-4">
-          <Upload className="w-4 h-4 text-teal-400" />
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-            Upload File
-          </h3>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Upload className="w-4 h-4 text-teal-400" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+              Upload Files
+            </h3>
+          </div>
+          {selectedFiles.length > 0 && (
+            <span className="text-xs text-slate-400 font-mono">
+              {selectedFiles.length} file{selectedFiles.length > 1 ? 's' : ''} selected ({formatBytes(selectedFiles.reduce((acc, f) => acc + f.size, 0))})
+            </span>
+          )}
         </div>
 
-        {uploadError && (
-          <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-400 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{uploadError}</span>
+        {uploadResults && (
+          <div className="space-y-2.5 mb-5">
+            {uploadResults.successes.length > 0 && (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400 space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>
+                    {uploadResults.successes.length} file{uploadResults.successes.length > 1 ? 's' : ''} uploaded successfully:
+                  </span>
+                </div>
+                <ul className="list-disc list-inside pl-1 space-y-0.5 text-emerald-300/90">
+                  {uploadResults.successes.map((msg, i) => (
+                    <li key={i}>{msg}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {uploadResults.errors.length > 0 && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-400 space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>
+                    {uploadResults.errors.length} file{uploadResults.errors.length > 1 ? 's' : ''} failed:
+                  </span>
+                </div>
+                <ul className="list-disc list-inside pl-1 space-y-0.5 text-red-300/90">
+                  {uploadResults.errors.map((msg, i) => (
+                    <li key={i}>{msg}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
-        {uploadSuccess && (
-          <div className="p-3 mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{uploadSuccess}</span>
-          </div>
-        )}
+        <form onSubmit={handleUpload} className="space-y-4">
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              multiple
+              className="hidden"
+            />
 
-        <form onSubmit={handleUpload} className="flex flex-col sm:flex-row items-center gap-3">
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            className="hidden"
-          />
+            <button
+              type="button"
+              onClick={handleChooseClick}
+              disabled={isUploading}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition shadow-sm active:scale-95 disabled:opacity-50 shrink-0"
+            >
+              Choose Files
+            </button>
 
-          <button
-            type="button"
-            onClick={handleChooseClick}
-            disabled={isUploading}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition shadow-sm active:scale-95 disabled:opacity-50"
-          >
-            Choose File
-          </button>
-
-          <div className="flex-1 text-xs text-slate-400 truncate w-full sm:w-auto text-center sm:text-left px-2">
-            {selectedFile ? (
-              <span className="text-slate-200 font-medium">
-                {selectedFile.name}{' '}
-                <span className="text-slate-400 font-normal">
-                  ({formatBytes(selectedFile.size)})
+            <div className="flex-1 text-xs text-slate-400 truncate w-full sm:w-auto text-center sm:text-left px-2">
+              {selectedFiles.length === 0 ? (
+                'No files chosen (Select one or multiple files using Ctrl or Shift)'
+              ) : selectedFiles.length === 1 ? (
+                <span className="text-slate-200 font-medium">
+                  {selectedFiles[0].name}{' '}
+                  <span className="text-slate-400 font-normal">
+                    ({formatBytes(selectedFiles[0].size)})
+                  </span>
                 </span>
-              </span>
-            ) : (
-              'No file chosen'
-            )}
+              ) : (
+                <span className="text-teal-300 font-medium">
+                  {selectedFiles.length} files selected{' '}
+                  <span className="text-slate-400 font-normal">
+                    (Total: {formatBytes(selectedFiles.reduce((acc, f) => acc + f.size, 0))})
+                  </span>
+                </span>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={selectedFiles.length === 0 || isUploading}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-slate-950 transition-all shadow-md shadow-teal-500/20 active:scale-95 disabled:opacity-50 disabled:pointer-events-none shrink-0"
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>
+                    Uploading ({uploadProgress.current}/{uploadProgress.total})...
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>
+                    {selectedFiles.length <= 1 ? 'Upload' : `Upload ${selectedFiles.length} Files`}
+                  </span>
+                </>
+              )}
+            </button>
           </div>
 
-          <button
-            type="submit"
-            disabled={!selectedFile || isUploading}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-slate-950 transition-all shadow-md shadow-teal-500/20 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
-          >
-            {isUploading ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Uploading...</span>
-              </>
-            ) : (
-              <>
-                <Upload className="w-3.5 h-3.5" />
-                <span>Upload</span>
-              </>
-            )}
-          </button>
+          {/* Selected Files List Preview */}
+          {selectedFiles.length > 0 && (
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5 max-h-48 overflow-y-auto">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-medium px-1 pb-1.5 border-b border-slate-800/80">
+                <span>Files ready to upload ({selectedFiles.length})</span>
+                {!isUploading && (
+                  <button
+                    type="button"
+                    onClick={clearSelectedFiles}
+                    className="text-[11px] text-slate-400 hover:text-red-400 transition"
+                  >
+                    Clear selection
+                  </button>
+                )}
+              </div>
+              {selectedFiles.map((file, idx) => (
+                <div
+                  key={`${file.name}-${idx}`}
+                  className="flex items-center justify-between text-xs py-1 px-1.5 hover:bg-slate-800/30 rounded-lg transition"
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <FileText className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                    <span className="text-slate-200 truncate max-w-xs sm:max-w-md" title={file.name}>
+                      {file.name}
+                    </span>
+                    <span className="text-slate-500 font-mono text-[11px] shrink-0">
+                      ({formatBytes(file.size)})
+                    </span>
+                    {file.size > 50 * 1024 * 1024 && (
+                      <span className="text-red-400 font-semibold text-[10px] bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/30 shrink-0">
+                        Exceeds 50MB
+                      </span>
+                    )}
+                  </div>
+                  {!isUploading && (
+                    <button
+                      type="button"
+                      onClick={() => removeSelectedFile(idx)}
+                      className="text-slate-500 hover:text-red-400 p-1 rounded transition ml-2 shrink-0"
+                      title="Remove file"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </form>
       </div>
 
