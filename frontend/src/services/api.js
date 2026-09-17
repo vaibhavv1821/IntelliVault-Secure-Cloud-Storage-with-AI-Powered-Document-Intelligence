@@ -1,8 +1,13 @@
 import axios from 'axios';
 
-// Base API instance configured for /api
+// Base API instance configured for /api (local dev) or custom VITE_API_BASE_URL (production)
+const rawBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const apiBaseUrl = (rawBaseUrl && rawBaseUrl.trim())
+  ? rawBaseUrl.trim().replace(/\/+$/, '')
+  : '/api';
+
 const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: apiBaseUrl,
   timeout: 10000,
 });
 
