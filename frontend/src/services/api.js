@@ -207,6 +207,40 @@ export const downloadFileApi = async (fileId, originalName) => {
   }
 };
 
+export const getFileBlobApi = async (fileId) => {
+  try {
+    const response = await apiClient.get(`/files/${fileId}/download`, {
+      responseType: 'blob',
+    });
+
+    return {
+      success: true,
+      blob: response.data,
+      contentType: response.headers['content-type'] || response.data?.type || 'application/octet-stream',
+    };
+  } catch (error) {
+    let errorMessage = 'Failed to load file preview';
+    if (error.response?.data instanceof Blob) {
+      try {
+        const errorText = await error.response.data.text();
+        const parsed = JSON.parse(errorText);
+        errorMessage = parsed.error?.message || errorMessage;
+      } catch {
+        // fallback
+      }
+    } else {
+      errorMessage = error.response?.data?.error?.message || error.message || errorMessage;
+    }
+    return {
+      success: false,
+      error: {
+        message: errorMessage,
+        code: error.response?.data?.error?.code || 'PREVIEW_ERROR',
+      },
+    };
+  }
+};
+
 export const deleteFileApi = async (fileId) => {
   try {
     const response = await apiClient.delete(`/files/${fileId}`);

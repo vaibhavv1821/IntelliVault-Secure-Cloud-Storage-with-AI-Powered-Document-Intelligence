@@ -10,13 +10,17 @@ import {
   AlertCircle,
   HardDrive,
   Download,
-  Trash2
+  Trash2,
+  Eye,
+  X,
+  FileQuestion
 } from 'lucide-react';
 import {
   uploadFileApi,
   getFilesApi,
   downloadFileApi,
-  deleteFileApi
+  deleteFileApi,
+  getFileBlobApi
 } from '../services/api';
 
 export const Dashboard = ({ user, onLogout }) => {
@@ -33,6 +37,12 @@ export const Dashboard = ({ user, onLogout }) => {
   const [deletingFileId, setDeletingFileId] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
+
+  // File preview state
+  const [previewFile, setPreviewFile] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
 
   const fileInputRef = useRef(null);
 
@@ -123,6 +133,130 @@ export const Dashboard = ({ user, onLogout }) => {
       fetchFiles();
     } else {
       setActionError(res.error?.message || `Failed to delete "${file.original_name}".`);
+    }
+  };
+
+  const isSupportedPreview = (file) => {
+    if (!file) return false;
+    const name = (file.original_name || '').toLowerCase();
+    const mime = (file.content_type || '').toLowerCase();
+
+    // PDF documents
+    if (mime === 'application/pdf' || name.endsWith('.pdf')) return true;
+
+    // Image formats
+    if (
+      mime.startsWith('image/') ||
+      name.endsWith('.png') ||
+      name.endsWith('.jpg') ||
+      name.endsWith('.jpeg') ||
+      name.endsWith('.gif') ||
+      name.endsWith('.webp') ||
+      name.endsWith('.svg') ||
+      name.endsWith('.bmp') ||
+      name.endsWith('.ico')
+    ) {
+      return true;
+    }
+
+    // Plain text and code files
+    if (
+      mime.startsWith('text/') ||
+      mime === 'application/json' ||
+      name.endsWith('.txt') ||
+      name.endsWith('.log') ||
+      name.endsWith('.csv') ||
+      name.endsWith('.json') ||
+      name.endsWith('.md') ||
+      name.endsWith('.py') ||
+      name.endsWith('.js') ||
+      name.endsWith('.jsx') ||
+      name.endsWith('.ts') ||
+      name.endsWith('.tsx') ||
+      name.endsWith('.html') ||
+      name.endsWith('.css') ||
+      name.endsWith('.xml') ||
+      name.endsWith('.yaml') ||
+      name.endsWith('.yml') ||
+      name.endsWith('.sh') ||
+      name.endsWith('.sql')
+    ) {
+      return true;
+    }
+
+    return false;
+  };
+
+  const closePreview = () => {
+    if (previewData?.url) {
+      window.URL.revokeObjectURL(previewData.url);
+    }
+    setPreviewFile(null);
+    setPreviewData(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && previewFile) {
+        closePreview();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewFile, previewData]);
+
+  const handlePreview = async (file) => {
+    if (previewData?.url) {
+      window.URL.revokeObjectURL(previewData.url);
+    }
+    setPreviewFile(file);
+    setPreviewData(null);
+    setPreviewError(null);
+
+    if (!isSupportedPreview(file)) {
+      setPreviewLoading(false);
+      return;
+    }
+
+    setPreviewLoading(true);
+    const res = await getFileBlobApi(file.id);
+    setPreviewLoading(false);
+
+    if (!res.success) {
+      setPreviewError(res.error?.message || 'Failed to load file preview.');
+      return;
+    }
+
+    const name = (file.original_name || '').toLowerCase();
+    const mime = (res.contentType || file.content_type || '').toLowerCase();
+
+    if (mime === 'application/pdf' || name.endsWith('.pdf')) {
+      const pdfBlob = new Blob([res.blob], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(pdfBlob);
+      setPreviewData({ type: 'pdf', url });
+    } else if (
+      mime.startsWith('image/') ||
+      name.endsWith('.png') ||
+      name.endsWith('.jpg') ||
+      name.endsWith('.jpeg') ||
+      name.endsWith('.gif') ||
+      name.endsWith('.webp') ||
+      name.endsWith('.svg') ||
+      name.endsWith('.bmp') ||
+      name.endsWith('.ico')
+    ) {
+      const imgBlob = new Blob([res.blob], { type: mime || 'image/png' });
+      const url = window.URL.createObjectURL(imgBlob);
+      setPreviewData({ type: 'image', url });
+    } else {
+      try {
+        const text = await res.blob.text();
+        setPreviewData({ type: 'text', text });
+      } catch (err) {
+        setPreviewError('Failed to decode text content.');
+      }
     }
   };
 
@@ -359,6 +493,17 @@ export const Dashboard = ({ user, onLogout }) => {
 
                   <button
                     type="button"
+                    onClick={() => handlePreview(file)}
+                    disabled={downloadingFileId === file.id || deletingFileId === file.id}
+                    title="Preview file"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 hover:text-teal-300 border border-teal-500/30 transition active:scale-95 disabled:opacity-50"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-teal-400" />
+                    <span>Preview</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => handleDownload(file)}
                     disabled={downloadingFileId === file.id || deletingFileId === file.id}
                     title="Download file"
@@ -392,6 +537,144 @@ export const Dashboard = ({ user, onLogout }) => {
           </div>
         )}
       </div>
+
+      {/* File Preview Modal */}
+      {previewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="relative w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/90">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-teal-500/10 border border-teal-500/20 text-teal-400 shrink-0">
+                  <Eye className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-slate-100 truncate max-w-[200px] sm:max-w-md" title={previewFile.original_name}>
+                    {previewFile.original_name}
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                    <span className="font-mono">{formatBytes(previewFile.size)}</span>
+                    <span>•</span>
+                    <span className="truncate max-w-[120px] sm:max-w-xs">{previewFile.content_type}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleDownload(previewFile)}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition"
+                  title="Download file"
+                >
+                  <Download className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Download</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 border border-transparent hover:border-slate-700 transition"
+                  title="Close preview (Esc)"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 p-4 sm:p-6 overflow-auto min-h-[320px] flex items-center justify-center bg-slate-950/60">
+              {previewLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-teal-400" />
+                  <p className="text-sm">Loading preview...</p>
+                </div>
+              ) : previewError ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center p-6 max-w-md">
+                  <div className="p-3 bg-red-500/10 rounded-2xl mb-3 text-red-400 border border-red-500/20">
+                    <AlertCircle className="w-8 h-8" />
+                  </div>
+                  <p className="text-sm font-medium text-red-300">Failed to load preview</p>
+                  <p className="text-xs text-slate-400 mt-1 mb-4">{previewError}</p>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(previewFile)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-teal-500 hover:bg-teal-400 text-slate-950 transition shadow-lg shadow-teal-500/20"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download File Instead</span>
+                  </button>
+                </div>
+              ) : !isSupportedPreview(previewFile) ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center p-6 max-w-md">
+                  <div className="p-3 bg-slate-800/80 rounded-2xl mb-3 text-slate-400 border border-slate-700">
+                    <FileQuestion className="w-8 h-8 text-teal-400" />
+                  </div>
+                  <p className="text-sm font-semibold text-slate-200">
+                    Preview not available for this file type.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1.5 mb-5 leading-relaxed">
+                    This file format cannot be displayed in the browser. You can download the file to view it locally.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(previewFile)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-teal-500 hover:bg-teal-400 text-slate-950 transition shadow-lg shadow-teal-500/20"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download File</span>
+                  </button>
+                </div>
+              ) : previewData?.type === 'pdf' ? (
+                <div className="w-full h-[70vh]">
+                  <iframe
+                    src={previewData.url}
+                    title={previewFile.original_name}
+                    className="w-full h-full rounded-xl border border-slate-800 bg-slate-950"
+                  />
+                </div>
+              ) : previewData?.type === 'image' ? (
+                <div className="flex items-center justify-center w-full max-h-[70vh]">
+                  <img
+                    src={previewData.url}
+                    alt={previewFile.original_name}
+                    className="max-h-[68vh] max-w-full object-contain rounded-xl shadow-lg border border-slate-800"
+                  />
+                </div>
+              ) : previewData?.type === 'text' ? (
+                <div className="w-full h-[70vh] flex flex-col">
+                  <pre className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-200 overflow-auto whitespace-pre-wrap select-text leading-relaxed">
+                    {previewData.text}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-slate-800 bg-slate-900/90">
+              <div className="text-xs text-slate-500">
+                IntelliVault Document Viewer
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDownload(previewFile)}
+                  className="flex sm:hidden items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700/80 transition"
+                >
+                  <Download className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Download</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
